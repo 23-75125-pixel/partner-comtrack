@@ -7,10 +7,11 @@ import { getAvatarDisplay } from "@/lib/avatar";
 import { notifyUser } from "@/lib/notifications";
 import { Message, supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   Image,
   Keyboard,
@@ -34,7 +35,7 @@ export default function ChatRoomScreen() {
   const c = Colors[scheme];
   const listRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
-
+  const navigation = useNavigation();
   const { getProfile, ensureLoaded } = useProfiles();
   const { isOnline } = usePresence();
   const friend = getProfile(id);
@@ -43,11 +44,23 @@ export default function ChatRoomScreen() {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  /** Distance to lift the input so it sits flush on top of the keyboard. */
+  const [keyboardLift, setKeyboardLift] = useState(0);
 
   useEffect(() => {
     if (id) void ensureLoaded([id]);
   }, [id, ensureLoaded]);
+
+  // Hide bottom tabs while typing so the input can sit on the keyboard
+  // without fighting the tab bar for space.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      tabBarStyle:
+        keyboardLift > 0
+          ? { display: "none" }
+          : undefined, // restore default tab bar style from parent layout
+    });
+  }, [keyboardLift, navigation]);
 
   useEffect(() => {
     const showEvent =
@@ -56,12 +69,24 @@ export default function ChatRoomScreen() {
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
     const onShow = (e: KeyboardEvent) => {
-      setKeyboardHeight(e.endCoordinates?.height ?? 0);
+      // Prefer screenY math — more accurate on many Android keyboards than
+      // endCoordinates.height alone (avoids a large empty gap above the keys).
+      const winH = Dimensions.get("window").height;
+      const screenY = e.endCoordinates?.screenY;
+      let lift =
+        typeof screenY === "number" && screenY > 0
+          ? Math.max(0, winH - screenY)
+          : (e.endCoordinates?.height ?? 0);
+
+      // With softwareKeyboardLayoutMode "pan", this lift is the only offset.
+      // Never add tabBarHeight on top — tabs are hidden while typing.
+      setKeyboardLift(lift);
+
       setTimeout(() => {
         listRef.current?.scrollToEnd({ animated: true });
       }, 50);
     };
-    const onHide = () => setKeyboardHeight(0);
+    const onHide = () => setKeyboardLift(0);
 
     const subShow = Keyboard.addListener(showEvent, onShow);
     const subHide = Keyboard.addListener(hideEvent, onHide);
@@ -200,6 +225,12 @@ export default function ChatRoomScreen() {
   const display = getAvatarDisplay(friend, c.primary);
   const online = isOnline(id);
 
+  // Closed keyboard: sit just above the tab bar (no extra safe-area gap).
+  // Open keyboard: tabs hidden, lift exactly to the keyboard top edge.
+  const inputBottomOffset = keyboardLift > 0 ? keyboardLift : 0;
+  const inputPaddingBottom =
+    keyboardLift > 0 ? Spacing.sm : Spacing.sm;
+
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: c.background }]}
@@ -253,7 +284,11 @@ export default function ChatRoomScreen() {
             data={messages}
             keyExtractor={(m) => m.id}
             renderItem={renderMsg}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[
+              styles.list,
+              // Keep last bubbles visible above the absolute input bar
+              { paddingBottom: 72 },
+            ]}
             style={styles.listFlex}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
@@ -269,10 +304,10 @@ export default function ChatRoomScreen() {
               {
                 backgroundColor: c.surface,
                 borderTopColor: c.border,
-                // Flush to the tab bar (tabs already include bottom inset).
-                paddingBottom: Spacing.sm,
-                paddingTop: Spacing.sm,
-                marginBottom: keyboardHeight,
+                paddingBottom: inputPaddingBottom,
+                // Absolute to the bottom of the chat screen, then lift by
+                // keyboardLift so the bar sits flush on the keyboard.
+                bottom: inputBottomOffset,
               },
             ]}
           >
@@ -292,7 +327,7 @@ export default function ChatRoomScreen() {
               onFocus={() => {
                 setTimeout(() => {
                   listRef.current?.scrollToEnd({ animated: true });
-                }, 100);
+                }, 120);
               }}
             />
             <Pressable
@@ -352,7 +387,6 @@ const styles = StyleSheet.create({
   listFlex: { flex: 1 },
   list: {
     padding: Spacing.lg,
-    paddingBottom: Spacing.xxl,
     flexGrow: 1,
   },
   bubble: {
@@ -363,10 +397,13 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   inputBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.md,
+    paddingTop: Spacing.sm,
     borderTopWidth: 1,
     gap: Spacing.sm,
   },
