@@ -4,6 +4,7 @@ import { usePresence } from "@/contexts/PresenceContext";
 import { useProfiles } from "@/contexts/ProfilesContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { getAvatarDisplay } from "@/lib/avatar";
+import { notifyUser } from "@/lib/notifications";
 import { Message, supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -12,26 +13,28 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
+  type KeyboardEvent,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 export default function ChatRoomScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const scheme = useColorScheme() ?? "light";
   const c = Colors[scheme];
   const listRef = useRef<FlatList>(null);
+  const insets = useSafeAreaInsets();
 
-  // The friend's avatar/username come straight from the shared realtime
-  // profile cache — if they change their avatar mid-conversation it
-  // updates here immediately, no reload needed.
   const { getProfile, ensureLoaded } = useProfiles();
   const { isOnline } = usePresence();
   const friend = getProfile(id);
@@ -40,10 +43,33 @@ export default function ChatRoomScreen() {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   useEffect(() => {
     if (id) void ensureLoaded([id]);
   }, [id, ensureLoaded]);
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const onShow = (e: KeyboardEvent) => {
+      setKeyboardHeight(e.endCoordinates?.height ?? 0);
+      setTimeout(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+    };
+    const onHide = () => setKeyboardHeight(0);
+
+    const subShow = Keyboard.addListener(showEvent, onShow);
+    const subHide = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, []);
 
   const load = useCallback(async () => {
     if (!user || !id) return;
@@ -63,7 +89,6 @@ export default function ChatRoomScreen() {
 
   useEffect(() => {
     load();
-
     if (!user || !id) return;
 
     const addMessage = (msg: Message) => {
@@ -73,9 +98,6 @@ export default function ChatRoomScreen() {
       });
     };
 
-    // Two targeted subscriptions (I can be either side of the
-    // conversation) instead of listening to every insert on the whole
-    // messages table and filtering client-side.
     const channel = supabase
       .channel(`chat-${user.id}-${id}`)
       .on(
@@ -122,8 +144,21 @@ export default function ChatRoomScreen() {
       receiver_id: id,
       content,
     });
-    if (error) console.warn("Send message error:", error.message);
+    if (error) {
+      console.warn("Send message error:", error.message);
+      setText(content);
+    } else {
+      const senderName = profile?.username ?? "Someone";
+      void notifyUser(id, {
+        title: senderName,
+        body: content,
+        data: { type: "message", friendId: user.id },
+      });
+    }
     setSending(false);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    });
   };
 
   const renderMsg = ({ item }: { item: Message }) => {
@@ -168,7 +203,7 @@ export default function ChatRoomScreen() {
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: c.background }]}
-      edges={["top", "bottom"]}
+      edges={["top"]}
     >
       <View style={[styles.header, { borderBottomColor: c.border }]}>
         <Pressable onPress={() => router.back()} style={styles.back}>
@@ -196,8 +231,11 @@ export default function ChatRoomScreen() {
             ]}
           />
         </View>
-        <View>
-          <Text style={[styles.headerName, { color: c.text }]}>
+        <View style={{ flex: 1 }}>
+          <Text
+            style={[styles.headerName, { color: c.text }]}
+            numberOfLines={1}
+          >
             {friend?.username ?? "Chat"}
           </Text>
           <Text style={[styles.headerStatus, { color: c.textSecondary }]}>
@@ -209,26 +247,35 @@ export default function ChatRoomScreen() {
       {loading ? (
         <ActivityIndicator style={{ flex: 1 }} color={c.primary} />
       ) : (
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={0}
-        >
+        <View style={styles.body}>
           <FlatList
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
             renderItem={renderMsg}
             contentContainerStyle={styles.list}
+            style={styles.listFlex}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             onContentSizeChange={() =>
               listRef.current?.scrollToEnd({ animated: true })
             }
+            onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
           />
 
           <View
             style={[
               styles.inputBar,
-              { backgroundColor: c.surface, borderTopColor: c.border },
+              {
+                backgroundColor: c.surface,
+                borderTopColor: c.border,
+                paddingBottom:
+                  keyboardHeight > 0
+                    ? Spacing.sm
+                    : Math.max(insets.bottom, Spacing.sm),
+                // Lift the whole input bar above the keyboard
+                marginBottom: keyboardHeight,
+              },
             ]}
           >
             <TextInput
@@ -242,6 +289,13 @@ export default function ChatRoomScreen() {
               onChangeText={setText}
               multiline
               maxLength={1000}
+              textAlignVertical="center"
+              blurOnSubmit={false}
+              onFocus={() => {
+                setTimeout(() => {
+                  listRef.current?.scrollToEnd({ animated: true });
+                }, 100);
+              }}
             />
             <Pressable
               onPress={send}
@@ -254,7 +308,7 @@ export default function ChatRoomScreen() {
               <Ionicons name="send" size={18} color="#fff" />
             </Pressable>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       )}
     </SafeAreaView>
   );
@@ -262,6 +316,7 @@ export default function ChatRoomScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  body: { flex: 1 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -269,13 +324,8 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     borderBottomWidth: 1,
   },
-  back: {
-    padding: Spacing.sm,
-  },
-  avatarWrap: {
-    position: "relative",
-    marginRight: Spacing.sm,
-  },
+  back: { padding: Spacing.sm },
+  avatarWrap: { position: "relative", marginRight: Spacing.sm },
   avatar: {
     width: 36,
     height: 36,
@@ -289,11 +339,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     overflow: "hidden",
   },
-  avatarText: {
-    color: "#fff",
-    fontWeight: "700",
-    fontSize: 14,
-  },
+  avatarText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   onlineDot: {
     position: "absolute",
     right: -2,
@@ -303,17 +349,13 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     borderWidth: 2,
   },
-  headerName: {
-    fontSize: FontSizes.lg,
-    fontWeight: "600",
-  },
-  headerStatus: {
-    fontSize: FontSizes.xs,
-    marginTop: 1,
-  },
+  headerName: { fontSize: FontSizes.lg, fontWeight: "600" },
+  headerStatus: { fontSize: FontSizes.xs, marginTop: 1 },
+  listFlex: { flex: 1 },
   list: {
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl,
+    flexGrow: 1,
   },
   bubble: {
     maxWidth: "78%",
@@ -325,23 +367,24 @@ const styles = StyleSheet.create({
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",
-    padding: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
     borderTopWidth: 1,
     gap: Spacing.sm,
   },
   input: {
     flex: 1,
-    minHeight: 42,
-    maxHeight: 100,
+    minHeight: 44,
+    maxHeight: 120,
     borderRadius: Radii.lg,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+    paddingVertical: Platform.OS === "ios" ? Spacing.md : Spacing.sm,
     fontSize: FontSizes.md,
   },
   sendBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
   },
