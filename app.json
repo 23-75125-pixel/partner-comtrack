@@ -1,0 +1,84 @@
+{
+  "expo": {
+    "name": "comtrack",
+    "slug": "realtime-location",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/app-logo.png",
+    "scheme": "realtimelocation",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "We need your location to show your position on the map and share it with friends.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to share your live position with friends even in the background."
+      },
+      "bundleIdentifier": "com.realtime.location"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#2563EB",
+        "foregroundImage": "./assets/images/app-logo.png",
+        "backgroundImage": "./assets/images/app-logo.png",
+        "monochromeImage": "./assets/images/app-logo.png"
+      },
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.INTERNET"
+      ],
+      "package": "com.realtime.location"
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/app-logo.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/app-logo.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#0F172A"
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Realtime Location to use your location to share with friends.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "@maplibre/maplibre-react-native",
+        {
+          "android": {
+            "locationEngine": "default"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c5ef8b93-4c55-42c3-93b2-aa2002bbf39d"
+      }
+    },
+    "owner": "23-75125",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c5ef8b93-4c55-42c3-93b2-aa2002bbf39d"
+    }
+  }
+}
