@@ -1,4 +1,6 @@
+import { ConnectionBanner } from "@/components/ConnectionBanner";
 import { EmptyState } from "@/components/EmptyState";
+import { SearchBar } from "@/components/SearchBar";
 import { Colors, FontSizes, Radii, Spacing } from "@/constants/theme";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProfiles } from "@/contexts/ProfilesContext";
@@ -27,8 +29,6 @@ export default function ChatsScreen() {
   const c = Colors[scheme];
   const { height: tabBarHeight } = useTabBarHeight();
 
-  // Friend list comes from the same realtime source as Map/Friends —
-  // a newly-accepted friend appears here instantly, no restart needed.
   const {
     acceptedFriendIds,
     acceptedFriendIdsKey,
@@ -40,12 +40,11 @@ export default function ChatsScreen() {
   const [lastMessages, setLastMessages] = useState<Record<string, Message>>(
     {},
   );
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState("");
 
-  // Depend on the stable key, not the array identity — a new [] every
-  // render previously caused an infinite setState loop that blanked the
-  // screen and ANR'd the app.
   useEffect(() => {
     if (!acceptedFriendIdsKey) return;
     void ensureLoaded(acceptedFriendIdsKey.split(","));
@@ -56,14 +55,13 @@ export default function ChatsScreen() {
       setLastMessages((prev) =>
         Object.keys(prev).length === 0 ? prev : {},
       );
+      setUnreadCounts({});
       setMessagesLoading(false);
       return;
     }
 
     const ids = acceptedFriendIdsKey.split(",");
 
-    // One query for everyone I might be chatting with, instead of an
-    // N+1 loop — then keep only the newest message per conversation.
     const orFilter = ids
       .map(
         (id) =>
@@ -84,12 +82,17 @@ export default function ChatsScreen() {
     }
 
     const next: Record<string, Message> = {};
+    const unreads: Record<string, number> = {};
     for (const msg of (data || []) as Message[]) {
       const otherId =
         msg.sender_id === user.id ? msg.receiver_id : msg.sender_id;
-      if (!next[otherId]) next[otherId] = msg; // first hit per friend = newest
+      if (!next[otherId]) next[otherId] = msg;
+      if (msg.receiver_id === user.id && !msg.read_at) {
+        unreads[otherId] = (unreads[otherId] ?? 0) + 1;
+      }
     }
     setLastMessages(next);
+    setUnreadCounts(unreads);
     setMessagesLoading(false);
   }, [user, acceptedFriendIdsKey]);
 
@@ -97,21 +100,28 @@ export default function ChatsScreen() {
     void loadLastMessages();
   }, [loadLastMessages]);
 
-  // Realtime: any message I send or receive updates the relevant preview
-  // immediately, so chat list previews never go stale waiting on a
-  // manual pull-to-refresh.
   useEffect(() => {
     if (!user) return;
 
     const applyMessage = (row: Message) => {
-      const otherId = row.sender_id === user.id ? row.receiver_id : row.sender_id;
+      const otherId =
+        row.sender_id === user.id ? row.receiver_id : row.sender_id;
       setLastMessages((prev) => {
         const current = prev[otherId];
-        if (current && new Date(current.created_at) >= new Date(row.created_at)) {
+        if (
+          current &&
+          new Date(current.created_at) >= new Date(row.created_at)
+        ) {
           return prev;
         }
         return { ...prev, [otherId]: row };
       });
+      if (row.receiver_id === user.id && !row.read_at) {
+        setUnreadCounts((prev) => ({
+          ...prev,
+          [otherId]: (prev[otherId] ?? 0) + 1,
+        }));
+      }
     };
 
     const channel = supabase
@@ -136,23 +146,50 @@ export default function ChatsScreen() {
         },
         (payload) => applyMessage(payload.new as Message),
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `receiver_id=eq.${user.id}`,
+        },
+        () => {
+          void loadLastMessages();
+        },
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user]);
+  }, [user, loadLastMessages]);
 
-  const chats = useMemo(
-    () =>
-      [...acceptedFriendIds]
-        .map((id) => ({ friendId: id, lastMessage: lastMessages[id] }))
-        .sort((a, b) => {
-          const ta = a.lastMessage?.created_at ?? "";
-          const tb = b.lastMessage?.created_at ?? "";
-          return tb.localeCompare(ta);
-        }),
-    [acceptedFriendIds, lastMessages],
+  const chats = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return [...acceptedFriendIds]
+      .map((id) => ({
+        friendId: id,
+        lastMessage: lastMessages[id],
+        unread: unreadCounts[id] ?? 0,
+      }))
+      .filter((row) => {
+        if (!q) return true;
+        const name = getProfile(row.friendId)?.username?.toLowerCase() ?? "";
+        const preview = row.lastMessage?.content?.toLowerCase() ?? "";
+        return name.includes(q) || preview.includes(q);
+      })
+      .sort((a, b) => {
+        if (a.unread !== b.unread) return b.unread - a.unread;
+        const ta = a.lastMessage?.created_at ?? "";
+        const tb = b.lastMessage?.created_at ?? "";
+        return tb.localeCompare(ta);
+      });
+  }, [acceptedFriendIds, lastMessages, unreadCounts, query, getProfile]);
+
+  const totalUnread = useMemo(
+    () => Object.values(unreadCounts).reduce((s, n) => s + n, 0),
+    [unreadCounts],
   );
 
   const onRefresh = async () => {
@@ -164,10 +201,11 @@ export default function ChatsScreen() {
   const renderItem = ({
     item,
   }: {
-    item: { friendId: string; lastMessage?: Message };
+    item: { friendId: string; lastMessage?: Message; unread: number };
   }) => {
     const friendProfile = getProfile(item.friendId);
     const display = getAvatarDisplay(friendProfile, c.primary);
+    const isUnread = item.unread > 0;
 
     return (
       <Pressable
@@ -177,36 +215,55 @@ export default function ChatsScreen() {
           { backgroundColor: c.surface, borderColor: c.border },
         ]}
       >
-        {display.imageUri ? (
-          <Image
-            source={{ uri: display.imageUri }}
-            style={styles.avatarImage}
-            resizeMode="cover"
-          />
-        ) : (
-          <View style={[styles.avatar, { backgroundColor: display.color }]}>
-            <Text style={styles.avatarText}>{display.initial}</Text>
-          </View>
-        )}
+        <View>
+          {display.imageUri ? (
+            <Image
+              source={{ uri: display.imageUri }}
+              style={styles.avatarImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={[styles.avatar, { backgroundColor: display.color }]}>
+              <Text style={styles.avatarText}>{display.initial}</Text>
+            </View>
+          )}
+        </View>
         <View style={styles.info}>
-          <Text style={[styles.name, { color: c.text }]}>
+          <Text
+            style={[
+              styles.name,
+              { color: c.text, fontWeight: isUnread ? "700" : "600" },
+            ]}
+          >
             {friendProfile?.username ?? "…"}
           </Text>
           <Text
-            style={[styles.preview, { color: c.textSecondary }]}
+            style={[
+              styles.preview,
+              {
+                color: isUnread ? c.text : c.textSecondary,
+                fontWeight: isUnread ? "600" : "400",
+              },
+            ]}
             numberOfLines={1}
           >
             {item.lastMessage?.content ?? "Say hello 👋"}
           </Text>
         </View>
-        {item.lastMessage && (
-          <Text style={[styles.time, { color: c.textSecondary }]}>
-            {new Date(item.lastMessage.created_at).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </Text>
-        )}
+        <View style={styles.meta}>
+          {item.lastMessage && (
+            <Text style={[styles.time, { color: c.textSecondary }]}>
+              {formatChatTime(item.lastMessage.created_at)}
+            </Text>
+          )}
+          {isUnread && (
+            <View style={[styles.badge, { backgroundColor: c.primary }]}>
+              <Text style={styles.badgeText}>
+                {item.unread > 99 ? "99+" : item.unread}
+              </Text>
+            </View>
+          )}
+        </View>
       </Pressable>
     );
   };
@@ -218,9 +275,23 @@ export default function ChatsScreen() {
       style={[styles.safe, { backgroundColor: c.background }]}
       edges={["top"]}
     >
+      <ConnectionBanner />
       <View style={styles.header}>
         <Text style={[styles.title, { color: c.text }]}>Chats</Text>
+        {totalUnread > 0 && (
+          <View style={[styles.headerBadge, { backgroundColor: c.primary }]}>
+            <Text style={styles.badgeText}>
+              {totalUnread > 99 ? "99+" : totalUnread}
+            </Text>
+          </View>
+        )}
       </View>
+
+      <SearchBar
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Search chats…"
+      />
 
       {loading ? (
         <ActivityIndicator style={{ marginTop: 40 }} color={c.primary} />
@@ -243,8 +314,12 @@ export default function ChatsScreen() {
           ListEmptyComponent={
             <EmptyState
               icon="chatbubbles-outline"
-              title="No conversations"
-              subtitle="Add friends first, then start chatting with them here."
+              title={query ? "No matches" : "No conversations"}
+              subtitle={
+                query
+                  ? "Try a different name or message."
+                  : "Add friends first, then start chatting with them here."
+              }
             />
           }
         />
@@ -253,16 +328,49 @@ export default function ChatsScreen() {
   );
 }
 
+function formatChatTime(iso: string) {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (
+    d.getFullYear() === yesterday.getFullYear() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getDate() === yesterday.getDate()
+  ) {
+    return "Yesterday";
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   header: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: Spacing.xxl,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
+    gap: Spacing.sm,
   },
   title: {
     fontSize: FontSizes.xxl,
     fontWeight: "700",
+  },
+  headerBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
   },
   list: {
     paddingHorizontal: Spacing.xxl,
@@ -300,13 +408,29 @@ const styles = StyleSheet.create({
   },
   name: {
     fontSize: FontSizes.md,
-    fontWeight: "600",
   },
   preview: {
     fontSize: FontSizes.sm,
     marginTop: 2,
   },
+  meta: {
+    alignItems: "flex-end",
+    gap: 6,
+  },
   time: {
     fontSize: FontSizes.xs,
+  },
+  badge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 5,
+  },
+  badgeText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "700",
   },
 });

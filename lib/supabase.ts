@@ -104,4 +104,6 @@ export type Message = {
   receiver_id: string;
   content: string;
   created_at: string;
+  /** null = unread (for messages sent to me). Set when I open the chat. */
+  read_at: string | null;
 };

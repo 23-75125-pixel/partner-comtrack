@@ -1,4 +1,6 @@
+import { ConnectionBanner } from "@/components/ConnectionBanner";
 import { EmptyState } from "@/components/EmptyState";
+import { SearchBar } from "@/components/SearchBar";
 import { Button } from "@/components/ui/Button";
 import { Colors, FontSizes, Radii, Spacing } from "@/constants/theme";
 import { useAuth } from "@/contexts/AuthContext";
@@ -8,6 +10,7 @@ import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useLiveFriends } from "@/hooks/use-live-friends";
 import { useTabBarHeight } from "@/hooks/use-tab-bar-height";
 import { getAvatarDisplay } from "@/lib/avatar";
+import { notifyUser } from "@/lib/notifications";
 import { Friendship, Profile, supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -23,7 +26,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { notifyUser } from "@/lib/notifications";
 
 type FriendRow = {
   id: string;
@@ -38,8 +40,6 @@ export default function FriendsScreen() {
   const c = Colors[scheme];
   const { height: tabBarHeight } = useTabBarHeight();
 
-  // Single realtime source of truth for friendships + friend locations,
-  // shared with the Map screen — the same data always agrees everywhere.
   const { friendships, locations, loading: friendsLoading, reload } =
     useLiveFriends();
   const { getProfile, ensureLoaded, upsertLocal } = useProfiles();
@@ -49,6 +49,7 @@ export default function FriendsScreen() {
   const [discoverLoading, setDiscoverLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<"friends" | "discover">("friends");
+  const [query, setQuery] = useState("");
 
   const friends: FriendRow[] = useMemo(() => {
     if (!user) return [];
@@ -96,7 +97,7 @@ export default function FriendsScreen() {
       }
 
       const others = (data || []) as Profile[];
-      others.forEach((p) => upsertLocal(p)); // warm the shared cache
+      others.forEach((p) => upsertLocal(p));
       setAllUsers(others.filter((p) => !relatedIds.has(p.id)));
     } catch (e) {
       console.warn("Discover load threw:", e);
@@ -115,26 +116,24 @@ export default function FriendsScreen() {
     setRefreshing(false);
   };
 
-  
-
- const sendRequest = async (friendId: string) => {
-  if (!user) return;
-  const { error } = await supabase.from("friendships").insert({
-    user_id: user.id,
-    friend_id: friendId,
-    status: "pending",
-  });
-  if (error) {
-    Alert.alert("Error", error.message);
-    return;
-  }
-  const fromName = profile?.username ?? "Someone";
-  void notifyUser(friendId, {
-    title: "Friend request",
-    body: `${fromName} wants to be friends`,
-    data: { type: "friend_request", fromId: user.id },
-  });
-};
+  const sendRequest = async (friendId: string) => {
+    if (!user) return;
+    const { error } = await supabase.from("friendships").insert({
+      user_id: user.id,
+      friend_id: friendId,
+      status: "pending",
+    });
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+    const fromName = profile?.username ?? "Someone";
+    void notifyUser(friendId, {
+      title: "Friend request",
+      body: `${fromName} wants to be friends`,
+      data: { type: "friend_request", fromId: user.id },
+    });
+  };
 
   const acceptRequest = async (friendshipId: string) => {
     const { error } = await supabase
@@ -281,9 +280,16 @@ export default function FriendsScreen() {
       style={[styles.safe, { backgroundColor: c.background }]}
       edges={["top"]}
     >
+      <ConnectionBanner />
       <View style={styles.header}>
         <Text style={[styles.title, { color: c.text }]}>Friends</Text>
       </View>
+
+      <SearchBar
+        value={query}
+        onChangeText={setQuery}
+        placeholder={tab === "friends" ? "Search friends…" : "Search people…"}
+      />
 
       <View style={[styles.tabs, { backgroundColor: c.inputBg }]}>
         <Pressable
@@ -326,7 +332,12 @@ export default function FriendsScreen() {
         <ActivityIndicator style={{ marginTop: 40 }} color={c.primary} />
       ) : tab === "friends" ? (
         <FlatList
-          data={friends}
+          data={friends.filter((f) => {
+            const q = query.trim().toLowerCase();
+            if (!q) return true;
+            const name = getProfile(f.friendId)?.username?.toLowerCase() ?? "";
+            return name.includes(q);
+          })}
           keyExtractor={(i) => i.id}
           renderItem={renderFriend}
           contentContainerStyle={[styles.list, listPadding]}
@@ -347,7 +358,14 @@ export default function FriendsScreen() {
         />
       ) : (
         <FlatList
-          data={allUsers}
+          data={allUsers.filter((u) => {
+            const q = query.trim().toLowerCase();
+            if (!q) return true;
+            return (
+              u.username.toLowerCase().includes(q) ||
+              (u.email ?? "").toLowerCase().includes(q)
+            );
+          })}
           keyExtractor={(i) => i.id}
           renderItem={renderDiscover}
           contentContainerStyle={[styles.list, listPadding]}
