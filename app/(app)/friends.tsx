@@ -12,17 +12,18 @@ import { Friendship, Profile, supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Image,
-    Pressable,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { notifyUser } from "@/lib/notifications";
 
 type FriendRow = {
   id: string;
@@ -32,7 +33,7 @@ type FriendRow = {
 };
 
 export default function FriendsScreen() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const scheme = useColorScheme() ?? "light";
   const c = Colors[scheme];
   const { height: tabBarHeight } = useTabBarHeight();
@@ -61,14 +62,29 @@ export default function FriendsScreen() {
     });
   }, [friendships, user]);
 
+  const relatedFriendIdsKey = useMemo(
+    () =>
+      friends
+        .map((f) => f.friendId)
+        .sort()
+        .join(","),
+    [friends],
+  );
+
   useEffect(() => {
-    void ensureLoaded(friends.map((f) => f.friendId));
-  }, [friends, ensureLoaded]);
+    if (!relatedFriendIdsKey) return;
+    void ensureLoaded(relatedFriendIdsKey.split(","));
+  }, [relatedFriendIdsKey, ensureLoaded]);
 
   const loadDiscover = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      setDiscoverLoading(false);
+      return;
+    }
     try {
-      const relatedIds = new Set(friends.map((f) => f.friendId));
+      const relatedIds = new Set(
+        relatedFriendIdsKey ? relatedFriendIdsKey.split(",") : [],
+      );
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
@@ -82,11 +98,12 @@ export default function FriendsScreen() {
       const others = (data || []) as Profile[];
       others.forEach((p) => upsertLocal(p)); // warm the shared cache
       setAllUsers(others.filter((p) => !relatedIds.has(p.id)));
+    } catch (e) {
+      console.warn("Discover load threw:", e);
     } finally {
       setDiscoverLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, friends.map((f) => f.friendId).join(","), upsertLocal]);
+  }, [user, relatedFriendIdsKey, upsertLocal]);
 
   useEffect(() => {
     void loadDiscover();
@@ -98,17 +115,26 @@ export default function FriendsScreen() {
     setRefreshing(false);
   };
 
-  const sendRequest = async (friendId: string) => {
-    if (!user) return;
-    const { error } = await supabase.from("friendships").insert({
-      user_id: user.id,
-      friend_id: friendId,
-      status: "pending",
-    });
-    if (error) Alert.alert("Error", error.message);
-    // No manual reload needed — the friendships realtime subscription
-    // (shared via useLiveFriends) picks this up automatically.
-  };
+  
+
+ const sendRequest = async (friendId: string) => {
+  if (!user) return;
+  const { error } = await supabase.from("friendships").insert({
+    user_id: user.id,
+    friend_id: friendId,
+    status: "pending",
+  });
+  if (error) {
+    Alert.alert("Error", error.message);
+    return;
+  }
+  const fromName = profile?.username ?? "Someone";
+  void notifyUser(friendId, {
+    title: "Friend request",
+    body: `${fromName} wants to be friends`,
+    data: { type: "friend_request", fromId: user.id },
+  });
+};
 
   const acceptRequest = async (friendshipId: string) => {
     const { error } = await supabase

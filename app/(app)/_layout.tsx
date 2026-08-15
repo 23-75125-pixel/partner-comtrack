@@ -13,6 +13,10 @@ export default function AppTabLayout() {
 
   return (
     <Tabs
+      // Unmount inactive tabs so Map / Friends / Chats never all hold
+      // heavy subscriptions and native views at once. Prevents memory
+      // pressure and blank-route crashes on lower-end Android devices.
+      detachInactiveScreens
       screenOptions={{
         tabBarActiveTintColor: c.tabIconSelected,
         tabBarInactiveTintColor: c.tabIconDefault,
@@ -20,6 +24,7 @@ export default function AppTabLayout() {
         tabBarButton: HapticTab,
         tabBarShowLabel: true,
         tabBarLabelPosition: "below-icon",
+        lazy: true,
         tabBarItemStyle: {
           justifyContent: "center",
           alignItems: "center",

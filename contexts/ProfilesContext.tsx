@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -121,13 +122,27 @@ export function ProfilesProvider({ children }: { children: React.ReactNode }) {
   );
 
   const upsertLocal = useCallback((profile: Profile) => {
-    setProfiles((prev) => ({ ...prev, [profile.id]: profile }));
+    setProfiles((prev) => {
+      const existing = prev[profile.id];
+      if (
+        existing &&
+        existing.username === profile.username &&
+        existing.avatar_url === profile.avatar_url &&
+        existing.email === profile.email
+      ) {
+        return prev;
+      }
+      return { ...prev, [profile.id]: profile };
+    });
   }, []);
 
+  const value = useMemo(
+    () => ({ profiles, getProfile, ensureLoaded, refresh, upsertLocal }),
+    [profiles, getProfile, ensureLoaded, refresh, upsertLocal],
+  );
+
   return (
-    <ProfilesContext.Provider
-      value={{ profiles, getProfile, ensureLoaded, refresh, upsertLocal }}
-    >
+    <ProfilesContext.Provider value={value}>
       {children}
     </ProfilesContext.Provider>
   );

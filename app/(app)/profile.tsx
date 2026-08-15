@@ -137,7 +137,7 @@ export default function ProfileScreen() {
         if (!uploadedUrl) {
           Alert.alert(
             "Upload failed",
-            "Your photo could not be uploaded to Supabase Storage. Please try again.",
+            "Your photo could not be uploaded to Supabase Storage. Create a public bucket named \"avatars\" in Supabase Storage (or run the storage section of SUPABASE_SCHEMA.sql), then try again.",
           );
           setSaving(false);
           return;
@@ -152,22 +152,56 @@ export default function ProfileScreen() {
         avatar_url: finalAvatarUrl,
       };
 
-      const { error } = await supabase
+      // Prefer UPDATE (row almost always exists via signup trigger). Fall
+      // back to INSERT if the row is missing. Avoid pure upsert, which can
+      // fail RLS when only one of insert/update policies is present.
+      let error: { message: string; code?: string } | null = null;
+
+      const { data: updatedRows, error: updateError } = await supabase
         .from("profiles")
-        .upsert(payload, { onConflict: "id" });
+        .update({
+          email: payload.email,
+          username: payload.username,
+          avatar_url: payload.avatar_url,
+        })
+        .eq("id", user.id)
+        .select("id");
+
+      if (updateError) {
+        error = updateError;
+      } else if (!updatedRows || updatedRows.length === 0) {
+        const { error: insertError } = await supabase
+          .from("profiles")
+          .insert(payload);
+        if (insertError) error = insertError;
+      }
 
       if (error) {
-        const message = error.message.toLowerCase();
-        Alert.alert(
-          "Error",
-          message.includes("username")
-            ? "Profile save failed because the Supabase table is missing the username column. Please run the SQL in SUPABASE_SCHEMA.sql."
-            : message.includes("profiles")
-              ? "Profile save failed. Please check your Supabase schema and run the SQL from SUPABASE_SCHEMA.sql."
-              : message.includes("unique")
-                ? "That username is already taken."
-                : error.message,
-        );
+        const message = (error.message || "").toLowerCase();
+        console.warn("Profile save error:", error.message, error.code);
+        let userMessage = error.message;
+        if (message.includes("unique") || message.includes("duplicate")) {
+          userMessage = "That username is already taken.";
+        } else if (
+          message.includes("row-level security") ||
+          message.includes("rls")
+        ) {
+          userMessage =
+            "Profile save blocked by row-level security. Re-run the full SQL in SUPABASE_SCHEMA.sql in your Supabase SQL Editor (policies section).";
+        } else if (
+          message.includes("username") &&
+          (message.includes("column") || message.includes("does not exist"))
+        ) {
+          userMessage =
+            "The profiles table is missing the username column. Run SUPABASE_SCHEMA.sql in the Supabase SQL Editor.";
+        } else if (
+          message.includes("profiles") &&
+          (message.includes("does not exist") || message.includes("relation"))
+        ) {
+          userMessage =
+            "The profiles table is missing. Run the full SUPABASE_SCHEMA.sql in the Supabase SQL Editor.";
+        }
+        Alert.alert("Error", userMessage);
         setSaving(false);
         return;
       }

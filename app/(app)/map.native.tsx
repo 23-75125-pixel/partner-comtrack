@@ -40,7 +40,12 @@ export default function MapScreen() {
   const { user, profile } = useAuth();
   const { getProfile } = useProfiles();
   const { isOnline } = usePresence();
-  const { locations, acceptedFriendIds, connectionState } = useLiveFriends();
+  const {
+    locations,
+    acceptedFriendIds,
+    acceptedFriendIdsKey,
+    connectionState,
+  } = useLiveFriends();
   const scheme = useColorScheme() ?? "light";
   const c = Colors[scheme];
   const { height: tabBarHeight } = useTabBarHeight();
@@ -182,17 +187,18 @@ export default function MapScreen() {
   // avatars/usernames on the map in sync with the shared realtime cache.
   const { ensureLoaded } = useProfiles();
   useEffect(() => {
-    if (acceptedFriendIds.length) void ensureLoaded(acceptedFriendIds);
-  }, [acceptedFriendIds, ensureLoaded]);
-
-  const now = Date.now();
+    if (!acceptedFriendIdsKey) return;
+    void ensureLoaded(acceptedFriendIdsKey.split(","));
+  }, [acceptedFriendIdsKey, ensureLoaded]);
 
   const friendMarkers = useMemo(() => {
+    const now = Date.now();
     return acceptedFriendIds
       .map((id) => {
         const loc = locations[id];
         if (!loc) return null;
-        const stale = now - new Date(loc.updated_at).getTime() > STALE_LOCATION_MS;
+        const stale =
+          now - new Date(loc.updated_at).getTime() > STALE_LOCATION_MS;
         if (stale) return null;
         const friendProfile = getProfile(id);
         return {
@@ -206,7 +212,7 @@ export default function MapScreen() {
         };
       })
       .filter((m): m is NonNullable<typeof m> => m !== null);
-  }, [acceptedFriendIds, locations, getProfile, isOnline, now]);
+  }, [acceptedFriendIds, locations, getProfile, isOnline]);
 
   const centerOnMe = useCallback(() => {
     if (!myLocation) {

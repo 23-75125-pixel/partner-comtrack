@@ -15,11 +15,13 @@ import { StyleSheet, Text, View } from "react-native";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { LiveFriendsProvider } from "@/contexts/LiveFriendsContext";
 import { PresenceProvider } from "@/contexts/PresenceContext";
 import { ProfilesProvider } from "@/contexts/ProfilesContext";
 import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { NotificationsProvider } from "@/contexts/NotificationsContext";
 
 export const unstable_settings = {
   anchor: "(auth)",
@@ -66,14 +68,19 @@ function RootNavigator() {
     }
   }, [session, loading, segments, navState?.key, router]);
 
-  return (
-    <PresenceProvider userId={user?.id}>
-      <Stack screenOptions={{ headerShown: false, animation: "fade" }}>
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(app)" />
-      </Stack>
-    </PresenceProvider>
-  );
+  // inside RootNavigator:
+return (
+  <PresenceProvider userId={user?.id}>
+    <LiveFriendsProvider>
+      <NotificationsProvider>
+        <Stack screenOptions={{ headerShown: false, animation: "fade" }}>
+          <Stack.Screen name="(auth)" />
+          <Stack.Screen name="(app)" />
+        </Stack>
+      </NotificationsProvider>
+    </LiveFriendsProvider>
+  </PresenceProvider>
+);
 }
 
 export default function RootLayout() {

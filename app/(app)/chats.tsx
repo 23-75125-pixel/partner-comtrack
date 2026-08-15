@@ -31,6 +31,7 @@ export default function ChatsScreen() {
   // a newly-accepted friend appears here instantly, no restart needed.
   const {
     acceptedFriendIds,
+    acceptedFriendIdsKey,
     loading: friendsLoading,
     reload: reloadFriends,
   } = useLiveFriends();
@@ -42,20 +43,28 @@ export default function ChatsScreen() {
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Depend on the stable key, not the array identity — a new [] every
+  // render previously caused an infinite setState loop that blanked the
+  // screen and ANR'd the app.
   useEffect(() => {
-    void ensureLoaded(acceptedFriendIds);
-  }, [acceptedFriendIds, ensureLoaded]);
+    if (!acceptedFriendIdsKey) return;
+    void ensureLoaded(acceptedFriendIdsKey.split(","));
+  }, [acceptedFriendIdsKey, ensureLoaded]);
 
   const loadLastMessages = useCallback(async () => {
-    if (!user || acceptedFriendIds.length === 0) {
-      setLastMessages({});
+    if (!user || !acceptedFriendIdsKey) {
+      setLastMessages((prev) =>
+        Object.keys(prev).length === 0 ? prev : {},
+      );
       setMessagesLoading(false);
       return;
     }
 
+    const ids = acceptedFriendIdsKey.split(",");
+
     // One query for everyone I might be chatting with, instead of an
     // N+1 loop — then keep only the newest message per conversation.
-    const orFilter = acceptedFriendIds
+    const orFilter = ids
       .map(
         (id) =>
           `and(sender_id.eq.${user.id},receiver_id.eq.${id}),and(sender_id.eq.${id},receiver_id.eq.${user.id})`,
@@ -76,12 +85,13 @@ export default function ChatsScreen() {
 
     const next: Record<string, Message> = {};
     for (const msg of (data || []) as Message[]) {
-      const otherId = msg.sender_id === user.id ? msg.receiver_id : msg.sender_id;
+      const otherId =
+        msg.sender_id === user.id ? msg.receiver_id : msg.sender_id;
       if (!next[otherId]) next[otherId] = msg; // first hit per friend = newest
     }
     setLastMessages(next);
     setMessagesLoading(false);
-  }, [user, acceptedFriendIds]);
+  }, [user, acceptedFriendIdsKey]);
 
   useEffect(() => {
     void loadLastMessages();

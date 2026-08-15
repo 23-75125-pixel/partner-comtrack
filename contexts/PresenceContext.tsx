@@ -68,13 +68,18 @@ export function PresenceProvider({
     };
   }, [userId]);
 
+  const isOnline = React.useCallback(
+    (id: string | null | undefined) => !!id && onlineIds.has(id),
+    [onlineIds],
+  );
+
+  const value = React.useMemo(
+    () => ({ onlineIds, isOnline }),
+    [onlineIds, isOnline],
+  );
+
   return (
-    <PresenceContext.Provider
-      value={{
-        onlineIds,
-        isOnline: (id) => !!id && onlineIds.has(id),
-      }}
-    >
+    <PresenceContext.Provider value={value}>
       {children}
     </PresenceContext.Provider>
   );
