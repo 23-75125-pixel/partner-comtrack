@@ -269,11 +269,9 @@ export default function ChatRoomScreen() {
               {
                 backgroundColor: c.surface,
                 borderTopColor: c.border,
-                paddingBottom:
-                  keyboardHeight > 0
-                    ? Spacing.sm
-                    : Math.max(insets.bottom, Spacing.sm),
-                // Lift the whole input bar above the keyboard
+                // Flush to the tab bar (tabs already include bottom inset).
+                paddingBottom: Spacing.sm,
+                paddingTop: Spacing.sm,
                 marginBottom: keyboardHeight,
               },
             ]}
